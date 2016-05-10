@@ -1,4 +1,5 @@
 #!/usr/bin/env perl
+# just for test
 use 5.10.1 ;
 use utf8 ;
 use DBI ;                                                   # libmysql++-dev
