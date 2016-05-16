@@ -41,16 +41,16 @@ my $maxmind_reader = MaxMind::DB::Reader->new( file => '/home/RS/GeoLite2-City.m
 my $redis_ip = 'production-redis.aiuvdm.0001.usw2.cache.amazonaws.com' ;
 my $redis = Redis->new(server => "$redis_ip:6379",reconnect => 10, every => 2000);
 #$redis -> auth('TestDBSkst$@') ;
-$redis -> select(9) ;
+$redis -> select(9) ;         # 统计指标存储于db9
 
-my $time_step = 80 ;
+my $time_step = 1 ;
 my $num_month_ago = $time_step / 30 + 1;
 
 
 # ---------------------------------------------------
 # connect to mysql
 # ---------------------------------------------------
-#my ($dj_db,$dj_host) = ('pintimes','dujiamysql.mysql.rds.aliyuncs.com') ;
+# 'pintimes','dujiamysql.mysql.rds.aliyuncs.com'     
 my ($dj_db,$dj_host) = ('pintimes','production-mysql.cone5c5tvg75.us-west-2.rds.amazonaws.com') ;
 my ($usr,$psw) = ('pt','SkstWebServer') ;
 my $dsn = "DBI:mysql:database=$dj_db;host=$dj_host" ;
@@ -58,7 +58,9 @@ my $dbh_dj = DBI -> connect($dsn, $usr, $psw, {'RaiseError' => 1} ) ;
 $dbh_dj -> do ("SET NAMES UTF8");
 
 #=pod
-# user::new
+# --------------------------------------
+# KPI月份的新增用户
+# --------------------------------------
 for ( 1 .. $num_month_ago)	
 {
         my $month_ago = $_ - 1 ;
@@ -127,7 +129,9 @@ for ( 1 .. $num_month_ago)
 
 
 #=pod
-#
+# --------------------------------------
+# KPI月份的活跃设备／ip／系统
+# --------------------------------------
 # user::active::[device/ip/os]
 for ( 1 .. $num_month_ago)	
 {
@@ -136,10 +140,11 @@ for ( 1 .. $num_month_ago)
         my $month_last = strftime("%Y-%m", localtime(time() - 86400 * 30 * ($month_ago + 1) )) ;
         
         my %ips ;
+        my %ips_weixin ;
         my %devices ;
         my %oses ;
         
-        # 25-24 devices
+        # 25-24 devices 活跃设备
         foreach( $redis -> keys( 'DJ::user::active::device_'.$month_last.'-*' ) )
         {
             my $key = $_ ;
@@ -162,7 +167,29 @@ for ( 1 .. $num_month_ago)
             $devices{$_} = 1 for @temp ;
         }
         
-        # 25-24 ip
+        # 25-24 活跃的微信ip
+        foreach( $redis -> keys( 'DJ::user::active::ip::weixin_'.$month_last.'-*' ) )
+        {
+            my $key = $_ ;
+            my ($day) = $key =~ /_\d+-\d+-(\d+)$/ ;
+            next if $day < 25 ;
+            my @temp = $redis->smembers($key);
+            my $n = scalar @temp ;
+            say "$key \t=>\t $n" ;
+            $ips_weixin{$_} = 1 for @temp ;
+        }
+        foreach( $redis -> keys( 'DJ::user::active::ip::weixin_'.$month.'-*' ) )
+        {
+            my $key = $_ ;
+            my ($day) = $key =~ /_\d+-\d+-(\d+)$/ ;
+            next if $day > 24 ;
+            my @temp = $redis->smembers($key);
+            my $n = scalar @temp ;
+            say "$key \t=>\t $n" ;
+            $ips_weixin{$_} = 1 for @temp ;
+        }
+        
+        # 25-24 ip 活跃ip
         foreach( $redis -> keys( 'DJ::user::active::ip_'.$month_last.'-*' ) )
         {
             my $key = $_ ;
@@ -193,28 +220,95 @@ for ( 1 .. $num_month_ago)
         }
         
         
-        my %countrys ;
-        for(keys %ips)
-        {
-                my $ip = $_ ;
-                my $record = $maxmind_reader -> record_for_address($ip);
-                my $ref_geo = geoIP($record) ;
-                my $country = $ref_geo -> {country} ;
-                my $subdivisions = $ref_geo -> {subdivisions}  ;
-                my $city = $ref_geo -> {city}  ;
-                $countrys{$country} ++ ;
-        }
-        my $temp_country = encode_json \%countrys;
-        say $month_last.'-25 => ' .$month.'-24 ip_country : ' . $temp_country ;
-        say $month_last.'-25 => ' .$month.'-24 devices : ' . scalar keys %devices ;
-        say $month_last.'-25 => ' .$month.'-24 ips : ' . scalar keys %ips ;
+        #my %countrys ;
+        #for(keys %ips)
+        #{
+        #        my $ip = $_ ;
+        #        my $record = $maxmind_reader -> record_for_address($ip);
+        #        my $ref_geo = geoIP($record) ;
+        #        my $country = $ref_geo -> {country} ;
+        #        my $subdivisions = $ref_geo -> {subdivisions}  ;
+        #        my $city = $ref_geo -> {city}  ;
+        #        $countrys{$country} ++ ;
+        #}
+        #my $temp_country = encode_json \%countrys;
+        #say $month_last.'-25 => ' .$month.'-24 ip_country : ' . $temp_country ;
+        
+        say $month_last.'-25 => ' .$month.'-24 active devices : ' . scalar keys %devices ;
+        say $month_last.'-25 => ' .$month.'-24 active ips : ' . scalar keys %ips ;
+        say $month_last.'-25 => ' .$month.'-24 from_weixin ips : ' . scalar keys %ips_weixin ;
         my $temp = encode_json \%oses;
-        say $month_last.'-25 => ' .$month.'-24 oses : ' . $temp ;
+        say $month_last.'-25 => ' .$month.'-24 active oses : ' . $temp ;
 }
 #=cut
 
+# ----------------------------------
+# 用户搜索关键词的月度统计
+# ----------------------------------
+for ( 1 .. $num_month_ago)	
+{
+        my $month_ago = $_ - 1 ;
+        my $month = strftime("%Y-%m", localtime(time() - 86400 * 30 * ($month_ago) )) ;
+        my $month_last = strftime("%Y-%m", localtime(time() - 86400 * 30 * ($month_ago + 1) )) ;
+        
+        my $kpi_time_start = $month_last.'-25' ;
+        my $kpi_time_end   = $month.'-24' ;
+        my %google ;
+        my $times ;
+        foreach( $redis -> keys( 'DJ::content::google::str_'.$month_last.'-*' ) )
+        {
+                my $key = $_ ;
+                my ($day) = $key =~ /_\d+-\d+-(\d+)$/ ;
+                next if $day < 25 ;
+                my $times_day ;
+                foreach($redis -> zrange($key, 0, -1))
+                {
+                        my $str = $_ ;
+                        my $n = $redis->zscore($key , $str) ;
+                        $times_day += $n ;
+                        $times += $n ;
+                        $google{decode_utf8 $str} += $n ;
+                }
+                say $month_last.'-'.$day.' google times : '.$times_day ;
+        }
+        foreach( $redis -> keys( 'DJ::content::google::str_'.$month.'-*' ) )
+        {
+                my $key = $_ ;
+                my ($day) = $key =~ /_\d+-\d+-(\d+)$/ ;
+                next if $day > 24 ;
+                my $times_day ;
+                foreach($redis -> zrange($key, 0, -1))
+                {
+                        my $str = $_ ;
+                        my $n = $redis->zscore($key , $str) ;
+                        $times_day += $n ;
+                        $times += $n ;
+                        $google{decode_utf8 $str} += $n ;
+                }
+                say $month.'-'.$day.' google times : '.$times_day ;
+        }
+        
+        # KPI月份的总google搜索次数及各关键词搜索次数
+        my $info = decode_utf8 encode_json \%google ;
+        say $month_last.'-25 => ' .$month.'-24 google times : '. $times ;
+        say $month_last.'-25 => ' .$month.'-24 google strings : ' .$info ;
+        
+        # 搜索关键词按次数排序固化，方便后续画词云图
+        open my $fh_g , ">:utf8" , '/home/RS/googlestr_'.$month.'.txt' ;
+        foreach(sort {$google{$b} <=> $google{$a}} keys %google)
+        {
+                my $word = $_ ;
+                my $v = $google{$word} ;
+                say $fh_g "$word\t$v" ;
+        }
+        
+}
+
 #=pod
+# ------------------------------------------------
 # content::[article/view/keywords]
+# 文章更新数量，浏览量及对所有文章内容取关键词
+# ------------------------------------------------
 for ( 1 .. $num_month_ago)	
 {
         my $month_ago = $_ - 1 ;
@@ -311,33 +405,6 @@ for ( 1 .. $num_month_ago)
         }
         say "$kpi_time_start => $kpi_time_end \n \t\t times : $times \n \t\t articles_view_top10 : $top" ;
         
-=pod        
-        # articles keywords
-        # ------------------------------------------------------------------------
-        my %keywords ;
-        foreach(keys %articleIds)
-        {
-                my $id = $_ ;
-                my $keywords_info = $redis->get('DJ::keywords::'.$id) ;
-                my $temp = decode_json $keywords_info ;
-                foreach (keys %$temp){
-                    my $word = $_ ;
-                    my $v = $$temp{$word} ;
-                    $keywords{$word} += $v ;
-                }
-        }
-        my $j ;
-        open my $fh_k , ">>:utf8" , '/home/LOG/words_'.$month.'.txt' ;
-        foreach(sort {$keywords{$b} <=> $keywords{$a}} keys %keywords)
-        {
-                my $word = $_ ;
-                next if $word =~ /^\d{1,3}$/ ;
-                next if $j > 99 ;
-                my $v = int ($keywords{$word} / 100);
-                say $fh_k "$word\t$v" ;
-                $j ++ ;
-        }
-=cut
 }
 #=cut
 
@@ -348,6 +415,7 @@ sub geoIP
     my ($record) = @_ ;
     my $country = $record->{country}->{names}->{en};
     my ($subdivisions,$city) ;
+    # 这个地方处理了一下，ip解析的时候中国地区的用中文，外国的用英文
     if ($country eq 'China')
     {
         $country = '中国' ;
@@ -364,11 +432,6 @@ sub geoIP
     return $ref_geo  ;
     
 }
-
-
-
-
-
 
 
 
